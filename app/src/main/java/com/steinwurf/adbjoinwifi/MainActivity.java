@@ -8,8 +8,11 @@ import android.net.ConnectivityManager;
 import android.net.ProxyInfo;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiManager;
+import android.net.wifi.WifiInfo;
+import android.net.wifi.SupplicantState;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
 import android.support.annotation.RequiresApi;
 import android.support.v7.app.AppCompatActivity;
 import android.util.Log;
@@ -32,6 +35,7 @@ public class MainActivity extends AppCompatActivity implements CheckSSIDBroadcas
     private static final String SSID = "ssid";
     private static final String PASSWORD_TYPE = "password_type";
     private static final String PASSWORD = "password";
+    private static final String HIDDEN_SSID = "hidden";
 
     private static final String PROXY_HOST = "proxy_host";
     private static final String PROXY_PORT = "proxy_port";
@@ -39,15 +43,24 @@ public class MainActivity extends AppCompatActivity implements CheckSSIDBroadcas
     private static final String PROXY_PAC_URI = "proxy_pac_uri";
 
     private static final String CLEAR_DEVICE_ADMIN = "clear_device_admin";
+    
+	private static final String LEAVE_APP_ON_SUCCESS = "leave_app_on_success";
 
     String mSSID;
     String mPassword;
     String mPasswordType;
+	boolean mHiddenSSID;
     ProxyInfo mProxyInfo;
+	
+	TextView mInformationsTextview;
 
     CheckSSIDBroadcastReceiver broadcastReceiver;
     WifiManager mWifiManager;
 
+	boolean mLeaveAppOnSuccess;
+	
+	Handler mHandler;
+    
     Thread mThread;
 
     private void printUsage()
@@ -57,6 +70,7 @@ public class MainActivity extends AppCompatActivity implements CheckSSIDBroadcas
                 "adb shell am start" +
                 " -n com.steinwurf.adbjoinwifi/.MainActivity " +
                 "-e ssid SSID " +
+				"--esn hidden" +
                 "-e password_type [WEP|WPA] " +
                 "-e password PASSWORD " +
                 "\nOptional proxy args:\n" +
@@ -66,7 +80,8 @@ public class MainActivity extends AppCompatActivity implements CheckSSIDBroadcas
                 "    OR\n" +
                 "    -e proxy_pac_uri http://my.proxy.config/url\n" +
                 "If app was granted device owner using dpm, you can unset it with:\n" +
-                "    -e clear_device_admin true");
+                "    -e clear_device_admin true\n" +
+				"--esn leave_app_on_success");
         Toast.makeText(this, "This application is meant to be used with ADB",
                 Toast.LENGTH_SHORT).show();
         finish();
@@ -90,11 +105,16 @@ public class MainActivity extends AppCompatActivity implements CheckSSIDBroadcas
             finish();
             return;
         }
+		
+		mHandler = new Handler();
 
         // Get Content
         mSSID = getIntent().getStringExtra(SSID);
         mPasswordType = getIntent().getStringExtra(PASSWORD_TYPE);
         mPassword = getIntent().getStringExtra(PASSWORD);
+		mHiddenSSID = getIntent().hasExtra(HIDDEN_SSID);
+		
+		mLeaveAppOnSuccess = getIntent().hasExtra(LEAVE_APP_ON_SUCCESS);
 
         String proxyHost = getIntent().getStringExtra(PROXY_HOST);
         String proxyPort = getIntent().getStringExtra(PROXY_PORT);
@@ -145,9 +165,12 @@ public class MainActivity extends AppCompatActivity implements CheckSSIDBroadcas
         layout.addView(textview, params);
 
         TextView SSIDtextview = new TextView(this);
-        SSIDtextview.setText(mSSID);
+        SSIDtextview.setText(mSSID + (mHiddenSSID?"*":"") + " " + mPasswordType + " " + mPassword );
         layout.addView(SSIDtextview, params);
-
+		
+		mInformationsTextview = new TextView(this);
+		mInformationsTextview.setText("");
+        layout.addView(mInformationsTextview, params);
         // Setup broadcast receiver
 
         broadcastReceiver = new CheckSSIDBroadcastReceiver(mSSID);
@@ -246,6 +269,25 @@ public class MainActivity extends AppCompatActivity implements CheckSSIDBroadcas
                         mWifiManager.reconnect();
                         // Wait and see if it worked. Otherwise try again.
                         sleep(10000);
+						
+						WifiInfo wifiInfo = mWifiManager.getConnectionInfo();
+						final SupplicantState supplicantState = wifiInfo.getSupplicantState();
+						if ( supplicantState == SupplicantState.COMPLETED)
+						{
+							if ( mLeaveAppOnSuccess )
+							{
+								finish();
+							}
+						}
+						else
+						{
+							mHandler.post(new Runnable() {
+								@Override
+								public void run() {
+									mInformationsTextview.setText("Error occurred, Wifi state: " + supplicantState.name());
+								}
+							});
+						}
                     }
                 } catch (InterruptedException ignored) {
                 }
@@ -286,6 +328,8 @@ public class MainActivity extends AppCompatActivity implements CheckSSIDBroadcas
         wfc.SSID = "\"".concat(mSSID).concat("\"");
         wfc.status = WifiConfiguration.Status.ENABLED;
         wfc.priority = 100;
+		wfc.hiddenSSID = mHiddenSSID;
+		
         if (mPasswordType == null) // no password
         {
             wfc.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.NONE);
